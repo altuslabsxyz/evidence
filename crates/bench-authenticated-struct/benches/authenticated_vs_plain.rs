@@ -1,36 +1,58 @@
-//! Benchmark comparing reth's Sparse Merkle Patricia Trie (MPT) get/set
-//! performance against native Rust data structures (HashMap, BTreeMap).
+//! Benchmark: authenticated vs plain data structure performance.
 //!
-//! The sparse trie is the in-memory structure reth uses to compute state roots
-//! incrementally. This benchmark quantifies the per-operation overhead of trie
-//! traversal compared to flat key-value containers.
+//! Compares the Merkle Patricia Trie (MPT) — an authenticated data structure
+//! whose root hash cryptographically commits to all stored values — against
+//! plain HashMap and BTreeMap, which provide no such commitment.
+//!
+//! The core question is how much structural overhead the trie imposes on basic
+//! operations. In an MPT, every leaf insertion walks a nibble path, potentially
+//! splits existing nodes (leaf → branch + leaves, or extending an extension
+//! node), and marks dirty paths for later rehashing. Plain structures simply
+//! store the value with no cascading work.
+//!
+//! Note on what is (and is not) measured:
+//!
+//! - `update_leaf` in reth's sparse trie does NOT perform hashing. It only
+//!   modifies the trie structure and marks dirty paths in the `prefix_set`.
+//!   Actual keccak256 rehashing is deferred to the `root()` call, which runs
+//!   once after all updates (typically at block end). The `set` benchmark
+//!   therefore measures pure structural overhead — node splitting, path
+//!   walking, and dirty marking — not cryptographic cost.
+//!
+//! - `get_leaf_value` does not traverse trie nodes. Internally it routes to
+//!   the correct subtrie and performs a HashMap lookup on the `values` map.
+//!   The `get` benchmark compares flat key-value lookup performance across
+//!   all three structures.
 //!
 //! ## Groups
 //!
 //! - **get/{1000,10000,100000}** — lookup 1,000 existing keys.
-//!   HashMap (O(1) amortized) vs BTreeMap (O(log n)) vs SparseTrie (nibble-path traversal).
+//!   HashMap (O(1) amortized) vs BTreeMap (O(log n)) vs SparseTrie (internal
+//!   HashMap lookup with subtrie routing).
 //!
 //! - **set/{1000,10000}** — insert 1,000 new keys into a pre-populated collection.
-//!   Measures allocation + structural mutation cost for each data structure.
+//!   This is where the structural cost of the trie is most visible: SparseTrie
+//!   must walk the nibble path, potentially split nodes, and mark dirty paths,
+//!   while HashMap/BTreeMap simply allocate and insert.
 //!
 //! Run:
-//!   cargo bench -p bench-trie-sparse
+//!   cargo bench -p bench-authenticated-struct
 
-use alloy_primitives::B256;
+use alloy_primitives::{map::HashMap, B256};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use rand::Rng;
+use rand::Rng as _;
 use reth_trie_common::{Nibbles, TrieNodeV2};
 use reth_trie_sparse::{
     provider::DefaultTrieNodeProvider, ParallelSparseTrie, RevealableSparseTrie, SparseTrie,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
-/// Generate N random 32-byte keys and convert to 64-nibble paths.
+/// Generate N random 32-byte keys and their nibble-path representations.
 fn generate_keys(n: usize) -> Vec<(B256, Nibbles)> {
     let mut rng = rand::thread_rng();
     let mut keys = Vec::with_capacity(n);
     for _ in 0..n {
-        let bytes: [u8; 32] = rng.random();
+        let bytes: [u8; 32] = rng.gen();
         let key = B256::from(bytes);
         let nibbles = Nibbles::unpack(key);
         keys.push((key, nibbles));
@@ -38,7 +60,7 @@ fn generate_keys(n: usize) -> Vec<(B256, Nibbles)> {
     keys
 }
 
-/// Build a sparse trie pre-populated with `keys`.
+/// Build an authenticated data structure (sparse MPT) pre-populated with `keys`.
 fn build_sparse_trie(keys: &[(B256, Nibbles)]) -> RevealableSparseTrie<ParallelSparseTrie> {
     let mut trie = RevealableSparseTrie::<ParallelSparseTrie>::default();
     let revealed = trie.reveal_root(TrieNodeV2::EmptyRoot, None, false).expect("reveal root");
@@ -60,14 +82,15 @@ fn bench_get(c: &mut Criterion) {
         let keys = generate_keys(size);
         let value = alloy_rlp::encode_fixed_size(&alloy_primitives::U256::from(42u64)).to_vec();
 
-        // Build all data structures
-        let mut hashmap: HashMap<B256, Vec<u8>> = HashMap::with_capacity(size);
+        // Build plain structures (HashMap, BTreeMap)
+        let mut hashmap: HashMap<B256, Vec<u8>> = HashMap::default();
         let mut btreemap: BTreeMap<B256, Vec<u8>> = BTreeMap::new();
         for (key, _) in &keys {
             hashmap.insert(*key, value.clone());
             btreemap.insert(*key, value.clone());
         }
 
+        // Build authenticated structure (MPT)
         let sparse_trie = build_sparse_trie(&keys);
         let revealed = sparse_trie.as_revealed_ref().expect("revealed");
 
@@ -115,7 +138,7 @@ fn bench_set(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("HashMap", size), |b| {
             b.iter_batched(
                 || {
-                    let mut map: HashMap<B256, Vec<u8>> = HashMap::with_capacity(size);
+                    let mut map: HashMap<B256, Vec<u8>> = HashMap::default();
                     for (key, _) in &existing_keys {
                         map.insert(*key, value.clone());
                     }

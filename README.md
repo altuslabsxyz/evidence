@@ -237,29 +237,28 @@ cargo bench -p bench-authenticated-struct
 | `get/{1000,10000,100000}` | Lookup 1,000 existing keys: HashMap O(1) vs BTreeMap O(log n) vs SparseTrie (internal HashMap lookup with subtrie routing) |
 | `set/{1000,10000}` | Insert 1,000 new keys into a pre-populated collection — where the trie's structural overhead is most visible |
 
-### Insights: What to learn from each benchmark
+### Results (Apple Silicon, 1,000 key operations)
 
-#### Get (lookup)
+All structures use the same hasher (foldhash via `alloy_primitives::map::HashMap`) to ensure a fair comparison of pure data structure overhead.
 
-Measures the cost of retrieving a value by key across all three structures.
+#### Get — lookup 1,000 keys
 
-- **HashMap** provides the baseline — O(1) amortized lookup.
-- **BTreeMap** uses O(log n) comparison-based search.
-- **SparseTrie** internally routes to the correct subtrie (upper or lower, based on path prefix) and performs a HashMap lookup on its `values` map. This is effectively O(1) with a small routing overhead.
-- If SparseTrie get performance is comparable to HashMap, it confirms that the trie's internal value storage imposes minimal read overhead — the structural complexity of the trie does not penalize lookups.
+| Collection size | HashMap | BTreeMap | SparseTrie | Trie vs HashMap |
+|-----------------|---------|----------|------------|-----------------|
+| 1K entries | 4.6 µs | 11.5 µs | 10.1 µs | 2.2x slower |
+| 10K entries | 6.1 µs | 19.0 µs | 13.4 µs | 2.2x slower |
+| 100K entries | 9.3 µs | 32.4 µs | 13.8 µs | 1.5x slower |
 
-#### Set (insertion)
+SparseTrie reads are slower than HashMap but faster than BTreeMap. This is because reth's SparseTrie does not traverse trie nodes on read — it maintains a separate internal HashMap (`values`) for fast value access, and `get_leaf_value` simply routes to the correct subtrie and performs a HashMap lookup. The trie node structure exists solely for `root()` hash computation. At 100K entries the gap with HashMap narrows because the trie distributes values across smaller subtrie HashMaps, improving cache locality.
 
-This is the benchmark where the structural cost of the trie becomes most apparent. Measures inserting 1,000 new random keys into a pre-populated collection.
+#### Set — insert 1,000 keys
 
-- **HashMap** and **BTreeMap** perform simple in-memory insertions with no cascading structural changes.
-- **SparseTrie** must walk to the correct leaf position, potentially split existing nodes (converting a leaf into a branch + two leaves, or extending an extension node), and mark every node on the dirty path in the `prefix_set`. No hashing occurs here — that is deferred to `root()`.
-- The ratio of SparseTrie insert time to HashMap/BTreeMap insert time quantifies the **structural write amplification** inherent in maintaining a trie: one logical write may trigger multiple node allocations, splits, and path updates.
-- `iter_batched` is used to clone the data structure before each iteration, ensuring every measurement starts from the same baseline state.
+| Pre-populated size | HashMap | BTreeMap | SparseTrie | Trie vs HashMap |
+|--------------------|---------|----------|------------|-----------------|
+| 1K entries | 59 µs | 65 µs | 273 µs | 4.6x slower |
+| 10K entries | 120 µs | 215 µs | 558 µs | 4.7x slower |
 
-### Summary
-
-These benchmarks answer a focused question: how much structural overhead does maintaining a trie impose compared to plain data structures, independent of cryptographic cost? The full cost of authentication — including the keccak256 rehashing cascade from every dirty leaf up to the root — is additive on top of what is measured here. For that dimension, see `bench-hash-commitment`, which quantifies the cost of `N * depth` hash operations (authenticated trie rehash) versus a single rolling hash pass.
+Writes are where the trie's structural overhead becomes visible. Each insert walks the nibble path, potentially splits nodes, and marks dirty paths — even without any hashing (which is deferred to `root()`). The full authentication cost including the keccak256 rehashing cascade is additive on top of this; see `bench-hash-commitment` for that dimension.
 
 ---
 

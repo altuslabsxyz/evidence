@@ -38,14 +38,14 @@
 //! Run:
 //!   cargo bench -p bench-authenticated-struct
 
-use alloy_primitives::B256;
+use alloy_primitives::{map::HashMap, B256};
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use rand::Rng as _;
 use reth_trie_common::{Nibbles, TrieNodeV2};
 use reth_trie_sparse::{
     provider::DefaultTrieNodeProvider, ParallelSparseTrie, RevealableSparseTrie, SparseTrie,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 /// Generate N random 32-byte keys and their nibble-path representations.
 fn generate_keys(n: usize) -> Vec<(B256, Nibbles)> {
@@ -83,7 +83,7 @@ fn bench_get(c: &mut Criterion) {
         let value = alloy_rlp::encode_fixed_size(&alloy_primitives::U256::from(42u64)).to_vec();
 
         // Build plain structures (HashMap, BTreeMap)
-        let mut hashmap: HashMap<B256, Vec<u8>> = HashMap::with_capacity(size);
+        let mut hashmap: HashMap<B256, Vec<u8>> = HashMap::default();
         let mut btreemap: BTreeMap<B256, Vec<u8>> = BTreeMap::new();
         for (key, _) in &keys {
             hashmap.insert(*key, value.clone());
@@ -138,7 +138,7 @@ fn bench_set(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("HashMap", size), |b| {
             b.iter_batched(
                 || {
-                    let mut map: HashMap<B256, Vec<u8>> = HashMap::with_capacity(size);
+                    let mut map: HashMap<B256, Vec<u8>> = HashMap::default();
                     for (key, _) in &existing_keys {
                         map.insert(*key, value.clone());
                     }

@@ -236,6 +236,8 @@ cargo bench -p bench-authenticated-struct
 |-------|-----------------|
 | `get/{1000,10000,100000}` | Lookup 1,000 existing keys: HashMap O(1) vs BTreeMap O(log n) vs SparseTrie (internal HashMap lookup with subtrie routing) |
 | `set/{1000,10000}` | Insert 1,000 new keys into a pre-populated collection — where the trie's structural overhead is most visible |
+| `commitment/{100..100000}` | Commitment computation only (no insertion): SparseTrie `root()` (keccak256 Merkle rehash) vs blake3 |
+| `sequential_blocks/{100..100000}` | 3 consecutive blocks (insert + commit per block): SparseTrie incremental `root()` vs HashMap + rolling blake3 delta |
 
 ### Results (Apple Silicon, 1,000 key operations)
 
@@ -258,7 +260,34 @@ SparseTrie reads are slower than HashMap but faster than BTreeMap. This is becau
 | 1K entries | 59 µs | 65 µs | 273 µs | 4.6x slower |
 | 10K entries | 120 µs | 215 µs | 558 µs | 4.7x slower |
 
-Writes are where the trie's structural overhead becomes visible. Each insert walks the nibble path, potentially splits nodes, and marks dirty paths — even without any hashing (which is deferred to `root()`). The full authentication cost including the keccak256 rehashing cascade is additive on top of this; see `bench-hash-commitment` for that dimension.
+Writes are where the trie's structural overhead becomes visible. Each insert walks the nibble path, potentially splits nodes, and marks dirty paths — even without any hashing (which is deferred to `root()`).
+
+#### Commitment — compute state commitment only (no insertion)
+
+| Dirty entries | SparseTrie `root()` | blake3 | Ratio |
+|---------------|---------------------|--------|-------|
+| 100 | 167 µs | 3.6 µs | 46x |
+| 1,000 | 520 µs | 35 µs | 15x |
+| 5,000 | 1.24 ms | 176 µs | 7.1x |
+| 10,000 | 1.97 ms | 352 µs | 5.6x |
+| 50,000 | 7.36 ms | 1.77 ms | 4.2x |
+| 100,000 | 14.3 ms | 3.52 ms | 4.1x |
+
+SparseTrie `root()` rehashes every dirty path from leaf to root using keccak256 — O(N × depth) discrete hash operations. blake3 streams all entries into a single hash context — O(N) with no structural overhead. The ratio narrows at scale as trie depth grows logarithmically (base-16), but remains 4x+ even at 100K entries.
+
+#### Sequential blocks — 3 blocks, insert + commit per block
+
+| Entries/block | SparseTrie (insert + `root()` × 3) | HashMap + rolling blake3 × 3 | Ratio |
+|---------------|-------------------------------------|-------------------------------|-------|
+| 100 | 666 µs | 21 µs | 32x |
+| 500 | 1.60 ms | 100 µs | 16x |
+| 1,000 | 2.41 ms | 200 µs | 12x |
+| 5,000 | 7.45 ms | 1.15 ms | 6.5x |
+| 10,000 | 14.6 ms | 2.26 ms | 6.5x |
+| 50,000 | 67.9 ms | 11.0 ms | 6.2x |
+| 100,000 | 142.8 ms | 22.8 ms | 6.3x |
+
+Simulates 3 consecutive blocks. SparseTrie uses incremental `root()` — only the paths dirtied in each block are rehashed. The rolling blake3 approach chains commitments: `blake3(prev_commitment || delta_entries)`, hashing only the current block's changes. Both sides include insertion cost for fairness. At scale the ratio stabilizes around 6x, reflecting the combined cost of trie structural maintenance + keccak256 rehashing vs flat HashMap insertion + blake3 streaming.
 
 ---
 

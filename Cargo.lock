@@ -1078,6 +1078,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
+ "blake3",
  "criterion",
  "rand 0.8.5",
  "reth-trie-common",

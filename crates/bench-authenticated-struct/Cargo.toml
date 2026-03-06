@@ -10,7 +10,12 @@ alloy-primitives = "1"
 alloy-rlp = "0.3"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+blake3 = "1"
 
 [[bench]]
 name = "authenticated_vs_plain"
+harness = false
+
+[[bench]]
+name = "commitment"
 harness = false

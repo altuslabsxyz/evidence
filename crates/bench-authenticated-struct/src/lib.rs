@@ -29,3 +29,9 @@
 //!
 //! - **set** — insert 1,000 new keys into 1K/10K entry collections.
 //!   Compares `HashMap::insert`, `BTreeMap::insert`, and `SparseTrie::update_leaf`.
+//!
+//! - **commitment** — compute state commitment only (no insertion).
+//!   Compares `SparseTrie::root()` (keccak256 Merkle rehash) vs blake3.
+//!
+//! - **sequential_blocks** — 3 consecutive blocks (insert + commit per block).
+//!   Compares SparseTrie incremental `root()` vs HashMap + rolling blake3 delta.

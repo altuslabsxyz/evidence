@@ -13,9 +13,9 @@ crates/
 │   ├── benches/               Criterion benchmarks (append, point query, full scan, unwind)
 │   └── tests/                 Data analysis tests (storage sizes, compression ratios)
 │
-├── bench-trie-sparse/         Sparse Trie vs native data structure benchmarks
+├── bench-authenticated-struct/         Authenticated vs plain data structure benchmarks
 │   ├── src/lib.rs              (crate root)
-│   └── benches/                Criterion benchmarks (get, set)
+│   └── benches/                Criterion benchmark: authenticated_vs_plain (get, set)
 │
 └── bench-hash-commitment/     Hash function & commitment strategy benchmarks
     ├── src/lib.rs              (crate root)
@@ -217,69 +217,49 @@ and minimal storage overhead.
 
 ---
 
-## bench-trie-sparse
+## bench-authenticated-struct
 
-Benchmarks reth's Sparse Merkle Patricia Trie (MPT) against native Rust data
-structures (HashMap, BTreeMap). The sparse trie is the in-memory structure reth
-uses to compute state roots incrementally.
+Measures the structural overhead of an authenticated data structure (Merkle Patricia Trie) compared to plain data structures (HashMap, BTreeMap).
+
+An authenticated data structure like the MPT produces a cryptographic root hash that commits to every value it contains, enabling Merkle proofs and stateless verification. Maintaining this trie structure has a cost: every leaf insertion walks a nibble path, potentially splits nodes, and marks the affected path as dirty for later rehashing. Plain structures simply store the value in place with no such overhead.
+
+An important detail of reth's implementation: `update_leaf` performs only structural changes — node splitting, path walking, and dirty marking in the `prefix_set`. No keccak256 hashing occurs during insertion. The actual rehashing cascade runs once when `root()` is called, typically at block end after all updates are applied. This means the `set` benchmark isolates pure trie structural overhead, separate from cryptographic cost (which is covered by the `bench-hash-commitment` crate).
+
+For reads, `get_leaf_value` does not traverse trie nodes. Internally it routes to the correct subtrie and performs a HashMap lookup on the `values` map. The `get` benchmark therefore compares flat key-value lookup performance across all three structures.
 
 ```bash
 # Run all benchmarks
-cargo bench -p bench-trie-sparse
+cargo bench -p bench-authenticated-struct
 ```
 
 | Group | What it measures |
 |-------|-----------------|
-| `get/{1000,10000,100000}` | Lookup 1,000 existing keys: HashMap O(1) vs BTreeMap O(log n) vs SparseTrie nibble-path traversal |
-| `set/{1000,10000}` | Insert 1,000 new keys into a pre-populated collection |
+| `get/{1000,10000,100000}` | Lookup 1,000 existing keys: HashMap O(1) vs BTreeMap O(log n) vs SparseTrie (internal HashMap lookup with subtrie routing) |
+| `set/{1000,10000}` | Insert 1,000 new keys into a pre-populated collection — where the trie's structural overhead is most visible |
 
 ### Insights: What to learn from each benchmark
 
 #### Get (lookup)
 
-Measures the cost of retrieving a value by key from each data structure.
-Keys are random 32-byte hashes (B256), converted to 64-nibble paths for the trie.
+Measures the cost of retrieving a value by key across all three structures.
 
-- **HashMap** provides the baseline — O(1) amortized lookup with a single hash
-  computation. This is the theoretical optimum for flat key-value access.
-- **BTreeMap** uses O(log n) comparison-based search. With 32-byte keys, each
-  comparison is a memcmp. Expect it to be slower than HashMap but with better
-  cache locality for sequential access patterns.
-- **SparseTrie** traverses a nibble-path (64 nibbles for a 32-byte key),
-  following branch/extension/leaf nodes. Each level requires a node lookup
-  and nibble matching. This reveals the **overhead of Merkle-Patricia
-  structure** — the cost we pay for being able to compute cryptographic
-  state proofs.
-- As collection size grows (1K -> 100K), HashMap stays roughly constant,
-  BTreeMap grows logarithmically, and SparseTrie's cost depends on trie
-  depth (which grows logarithmically in base-16, so much slower than binary).
-- The gap between HashMap and SparseTrie quantifies the **per-lookup cost of
-  supporting state proofs** in reth.
+- **HashMap** provides the baseline — O(1) amortized lookup.
+- **BTreeMap** uses O(log n) comparison-based search.
+- **SparseTrie** internally routes to the correct subtrie (upper or lower, based on path prefix) and performs a HashMap lookup on its `values` map. This is effectively O(1) with a small routing overhead.
+- If SparseTrie get performance is comparable to HashMap, it confirms that the trie's internal value storage imposes minimal read overhead — the structural complexity of the trie does not penalize lookups.
 
 #### Set (insertion)
 
-Measures inserting 1,000 new random keys into a pre-populated collection.
+This is the benchmark where the structural cost of the trie becomes most apparent. Measures inserting 1,000 new random keys into a pre-populated collection.
 
-- **HashMap** and **BTreeMap** perform simple insertions with allocation.
-- **SparseTrie** must walk the trie to the correct leaf position, potentially
-  splitting existing nodes (converting a leaf to a branch + two leaves, or
-  extending an extension node). This structural mutation is the expensive part.
-- `iter_batched` is used to clone the data structure before each measurement
-  round, ensuring we always insert into the same baseline state.
-- This benchmark reveals the **write amplification** of trie structures:
-  a single logical insert may touch multiple internal nodes.
-- The ratio of SparseTrie insert time to HashMap insert time shows the
-  overhead of maintaining a Merkle-proof-capable structure during state
-  transitions.
+- **HashMap** and **BTreeMap** perform simple in-memory insertions with no cascading structural changes.
+- **SparseTrie** must walk to the correct leaf position, potentially split existing nodes (converting a leaf into a branch + two leaves, or extending an extension node), and mark every node on the dirty path in the `prefix_set`. No hashing occurs here — that is deferred to `root()`.
+- The ratio of SparseTrie insert time to HashMap/BTreeMap insert time quantifies the **structural write amplification** inherent in maintaining a trie: one logical write may trigger multiple node allocations, splits, and path updates.
+- `iter_batched` is used to clone the data structure before each iteration, ensuring every measurement starts from the same baseline state.
 
 ### Summary
 
-These benchmarks help answer: "How much performance do we sacrifice by using
-a Merkle trie instead of a flat map?" The answer informs decisions about:
-
-- Whether to cache hot state in a flat HashMap and lazily update the trie
-- How aggressively to batch trie updates (amortize structural mutation)
-- The performance ceiling for state root computation in block execution
+These benchmarks answer a focused question: how much structural overhead does maintaining a trie impose compared to plain data structures, independent of cryptographic cost? The full cost of authentication — including the keccak256 rehashing cascade from every dirty leaf up to the root — is additive on top of what is measured here. For that dimension, see `bench-hash-commitment`, which quantifies the cost of `N * depth` hash operations (authenticated trie rehash) versus a single rolling hash pass.
 
 ---
 
@@ -371,7 +351,7 @@ trees with Pedersen commitments) that reduce the per-entry proof cost.
 [workspace]
 members = [
     "crates/bench-mdbx-shard",
-    "crates/bench-trie-sparse",
+    "crates/bench-authenticated-struct",
     "crates/bench-hash-commitment",
     "crates/bench-<topic>",
 ]

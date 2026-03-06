@@ -1,0 +1,17 @@
+[package]
+name = "bench-mdbx-shard"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+reth-libmdbx = { git = "https://github.com/paradigmxyz/reth.git", rev = "8e3b5e6a99", features = ["return-borrowed"] }
+roaring = "0.10.2"
+tempfile = "3"
+rand = "0.8"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "shard_size"
+harness = false

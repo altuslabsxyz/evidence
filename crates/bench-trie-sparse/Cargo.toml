@@ -1,0 +1,16 @@
+[package]
+name = "bench-trie-sparse"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reth-trie-sparse = { git = "https://github.com/paradigmxyz/reth.git", rev = "6366201f16", features = ["test-utils"] }
+reth-trie-common = { git = "https://github.com/paradigmxyz/reth.git", rev = "6366201f16", features = ["test-utils"] }
+alloy-primitives = "1"
+alloy-rlp = "0.3"
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
+
+[[bench]]
+name = "trie_vs_native"
+harness = false

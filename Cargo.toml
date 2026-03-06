@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/bench-mdbx-shard",
+    "crates/bench-trie-sparse",
+    "crates/bench-hash-commitment",
+]

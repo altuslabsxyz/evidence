@@ -17,9 +17,9 @@ crates/
 │   ├── src/lib.rs              (crate root)
 │   └── benches/                Criterion benchmark: authenticated_vs_plain (get, set)
 │
-└── bench-hash-commitment/     Hash function & commitment strategy benchmarks
+└── bench-hash-commitment/     Hash function throughput benchmarks
     ├── src/lib.rs              (crate root)
-    └── benches/                Criterion benchmarks (hash_function, commitment_strategy)
+    └── benches/                Criterion benchmark: hash_function (keccak256, sha256, blake3)
 ```
 
 ## Running Benchmarks & Viewing Reports
@@ -293,80 +293,23 @@ Simulates 3 consecutive blocks. SparseTrie uses incremental `root()` — only th
 
 ## bench-hash-commitment
 
-Benchmarks comparing hash algorithm throughput and commitment strategies relevant
-to Ethereum state root computation.
+Pure hash function throughput comparison across input sizes.
 
 ```bash
 cargo bench -p bench-hash-commitment
 ```
 
-| Group | What it measures |
-|-------|-----------------|
-| `hash_function/keccak256/{32B,256B,1024B,4096B}` | Keccak-256 throughput across input sizes |
-| `hash_function/sha256/{32B,256B,1024B,4096B}` | SHA-256 throughput across input sizes |
-| `hash_function/blake3/{32B,256B,1024B,4096B}` | Blake3 throughput across input sizes |
-| `commitment_strategy/authenticated_depth8_keccak/{100,500,1K,5K}` | Simulated Merkle trie rehash: each entry triggers 8 sequential keccak256 ops along its dirty path |
-| `commitment_strategy/rolling_keccak/{100,500,1K,5K}` | Rolling hash: stream all entries into one keccak256 invocation |
-| `commitment_strategy/rolling_sha256/{100,500,1K,5K}` | Rolling hash with SHA-256 |
-| `commitment_strategy/rolling_blake3/{100,500,1K,5K}` | Rolling hash with Blake3 |
+### Results (Apple Silicon)
 
-### Insights: What to learn from each benchmark
+| Input size | Keccak-256 | SHA-256 | Blake3 |
+|------------|------------|---------|--------|
+| 32B | 143 ns | 111 ns | 52 ns |
+| 64B | 133 ns | 220 ns | 53 ns |
+| 256B | 247 ns | 536 ns | 195 ns |
+| 1 KiB | 1.03 µs | 1.93 µs | 803 ns |
+| 4 KiB | 3.99 µs | 7.04 µs | 1.69 µs |
 
-#### Hash function throughput
-
-Measures raw speed of each hash algorithm at various input sizes, independent of
-any trie or commitment structure.
-
-- **Keccak-256** is Ethereum's native hash. It is a sponge-based construction
-  that processes data in 136-byte blocks. It has no hardware acceleration on
-  most platforms, making it the slowest of the three at larger inputs.
-- **SHA-256** benefits from dedicated CPU instructions (SHA-NI on x86, hardware
-  crypto extensions on ARM). On Apple Silicon, expect SHA-256 to match or beat
-  keccak256, especially at larger input sizes where the hardware pipeline
-  stays saturated.
-- **Blake3** is designed for parallelism (internal SIMD and tree hashing). For
-  small inputs (32B) the setup overhead may dominate, but at 1 KiB+ it
-  typically outperforms both keccak and SHA-256 significantly.
-- The 32-byte case is particularly important: it represents hashing a single
-  trie node (combining two 16-byte child hashes), which is the dominant
-  operation during state root computation.
-
-#### Commitment strategies
-
-Compares two fundamentally different approaches to committing a batch of state
-changes, answering: "How expensive is authenticated commitment compared to a
-simple rolling hash?"
-
-- **Authenticated (trie rehash)** simulates what Ethereum actually does: for
-  each changed entry, rehash all nodes along its Merkle path (depth=8 is
-  realistic for the Ethereum state trie). This means `N * depth` sequential
-  hash operations. The cost scales linearly with both the number of changes
-  and the trie depth.
-- **Rolling hash** simply streams the previous commitment and all changed
-  entries into a single hash invocation. This produces a commitment (useful
-  for detecting changes) but does not support per-entry Merkle proofs.
-- Expect rolling hash to be **orders of magnitude faster** than authenticated
-  commitment — the gap widens with more entries because rolling hash is O(N)
-  total hashing while authenticated is O(N * depth).
-- Among rolling hash variants, Blake3 should be fastest, followed by SHA-256
-  (with hardware support), then keccak256.
-- This quantifies the **cost of Merkle proofs**: the performance gap between
-  authenticated and rolling commitment is exactly the price Ethereum pays for
-  supporting stateless verification and light clients.
-
-### Summary
-
-| | Keccak-256 | SHA-256 | Blake3 |
-|---|---|---|---|
-| Small input (32B) | Baseline | Comparable | Comparable (setup overhead) |
-| Large input (4 KiB) | Slowest | Fast (HW accel) | Fastest (SIMD) |
-| Ethereum compatibility | Native | Not compatible | Not compatible |
-
-The key takeaway is that Ethereum's choice of keccak256 is the most expensive
-option from a pure throughput perspective, and the authenticated trie commitment
-model multiplies that cost by the trie depth for every changed entry. This
-motivates research into alternative state commitment schemes (e.g., Verkle
-trees with Pedersen commitments) that reduce the per-entry proof cost.
+Blake3 is the fastest across all input sizes, ~2.7x faster than keccak256 at 32B (the dominant trie node hash size). SHA-256 is faster than keccak256 only at 32B; at larger inputs it becomes the slowest due to lack of hardware acceleration on this platform. Keccak256 has no hardware acceleration on any common platform, making it a pure software implementation.
 
 ---
 

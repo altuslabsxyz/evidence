@@ -37,18 +37,33 @@ cargo bench -p bench-mdbx-shard
 
 # Run a specific benchmark group within a crate
 cargo bench -p bench-mdbx-shard -- append
+```
 
-# Open the HTML report (macOS)
+Reports are generated under `target/criterion/` with the following structure:
+
+```
+target/criterion/
+├── report/index.html                        # top-level overview of all groups
+├── hash_function/report/index.html          # per-group report with violin plots
+├── commitment_strategy/report/index.html
+├── append_10K/report/index.html
+│   ├── noshard/report/index.html            # per-function detail
+│   ├── s=2000/report/index.html
+│   └── ...
+└── ...
+```
+
+```bash
+# Open a specific group report (macOS)
+open target/criterion/hash_function/report/index.html
+
+# Or browse the top-level overview
 open target/criterion/report/index.html
 ```
 
-The `index.html` page lists all benchmark groups. Click into any group to see
-detailed plots for each function. From the second run onward, Criterion
-automatically compares against the previous baseline and highlights regressions
-or improvements (e.g., `+2.3%`, `-5.1%`).
-
-Reports are stored under `target/criterion/` and persist across runs until you
-delete them.
+From the second run onward, Criterion automatically compares against the
+previous baseline and highlights regressions or improvements (e.g., `+2.3%`,
+`-5.1%`). Reports persist across runs until manually deleted.
 
 ---
 
